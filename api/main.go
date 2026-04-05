@@ -78,6 +78,15 @@ func main() {
 		Bucket:      minioBucket,
 	}
 
+	sseDeps := &handlers.SSEDeps{
+		DB: database,
+	}
+
+	healthDeps := &handlers.HealthDeps{
+		DB:          database,
+		RedisClient: redisClient,
+	}
+
 	// Routes
 	api := app.Group("/api")
 
@@ -85,13 +94,9 @@ func main() {
 	api.Get("/videos", handlers.HandleListVideos(database))
 	api.Get("/videos/:id", handlers.HandleGetVideo(database))
 	api.Get("/videos/:id/stream", handlers.HandleStream(streamDeps))
+	api.Get("/videos/:id/events", handlers.HandleVideoSSE(sseDeps))
 
-	app.Get("/api/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":  "ok",
-			"service": "streamforge-api",
-		})
-	})
+	app.Get("/api/health", handlers.HandleHealth(healthDeps))
 
 	// Start server
 	port := getEnv("PORT", "8080")

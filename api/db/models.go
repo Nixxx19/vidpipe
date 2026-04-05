@@ -100,6 +100,16 @@ func ListVideos(db *sql.DB) ([]Video, error) {
 	return videos, nil
 }
 
+func CheckAllCompleted(db *sql.DB, videoID string) (bool, error) {
+	var transcode, caption, thumbnail string
+	query := `SELECT transcode_status, caption_status, thumbnail_status FROM videos WHERE id = $1`
+	err := db.QueryRow(query, videoID).Scan(&transcode, &caption, &thumbnail)
+	if err != nil {
+		return false, fmt.Errorf("failed to check completion statuses: %w", err)
+	}
+	return transcode == "completed" && caption == "completed" && thumbnail == "completed", nil
+}
+
 func UpdateVideoField(db *sql.DB, id string, field string, value interface{}) error {
 	allowedFields := map[string]bool{
 		"status":           true,

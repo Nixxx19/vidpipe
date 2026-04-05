@@ -1,35 +1,38 @@
 # vidpipe
 
-a self-hosted video processing pipeline that automatically generates captions, picks the best thumbnail, and transcodes to adaptive streaming — all from a single upload.
+the video processing backend that YouTube, Udemy, and Vimeo all had to build from scratch — except you get it with `docker compose up`.
 
-built because most video platforms handle uploads with a single FFmpeg command and call it a day. vidpipe treats every upload as a pipeline: three independent workers process the video in parallel, each doing one thing well.
+upload a video. vidpipe transcodes it to adaptive streaming, generates captions with AI, and picks the best thumbnail. three workers, running in parallel, fully self-hosted. no API keys, no cloud bills, no vendor lock-in.
 
-## the problem
+## why does this exist
 
-you upload a video to your platform. now you need to:
-- transcode it to multiple qualities so it plays smoothly on slow connections
-- generate captions so it's accessible (and searchable)
-- pick a thumbnail that isn't a black frame or someone mid-blink
+every platform that handles video uploads ends up building the same pipeline:
 
-most teams do this sequentially, or skip the hard parts entirely. vidpipe does all three in parallel, automatically, the moment you upload.
+```
+raw upload → transcode → captions → thumbnails → serve
+```
 
-## how it works
+YouTube does this. Twitch does this. Every course platform, every internal training tool, every video-based product does this. but building it from scratch takes months — you need queue-based job distribution, S3-compatible storage, adaptive streaming, speech-to-text, frame analysis, and a dashboard to monitor it all.
+
+vidpipe is that entire pipeline in one repo. clone it, run it, upload a video.
+
+## the pipeline
 
 ```mermaid
 flowchart TB
     subgraph upload["1. Upload"]
-        A[User uploads video] --> B[Go API receives file]
-        B --> C[Stored in MinIO<br/>S3-compatible storage]
-        B --> D[3 jobs published to<br/>Redis Streams]
+        A["User uploads video"] --> B["Go API extracts metadata<br/>(duration, resolution, codec via ffprobe)"]
+        B --> C["Raw file → MinIO (S3 storage)"]
+        B --> D["3 jobs → Redis Streams"]
     end
 
     subgraph processing["2. Parallel Processing"]
-        D --> E["Transcode Worker<br/>(Go + FFmpeg)<br/>→ HLS 360p/720p/1080p"]
-        D --> F["Whisper Worker<br/>(Python)<br/>→ SRT captions + language"]
-        D --> G["Thumbnail Worker<br/>(Python + OpenCV)<br/>→ quality-scored frames"]
+        D --> E["🎬 Transcode Worker<br/>(Go + FFmpeg)<br/>→ HLS 360p / 720p / 1080p"]
+        D --> F["🗣️ Whisper Worker<br/>(Python + OpenAI Whisper)<br/>→ SRT captions + language detection"]
+        D --> G["🖼️ Thumbnail Worker<br/>(Python + OpenCV)<br/>→ quality-scored frame selection"]
     end
 
-    subgraph storage["3. Results"]
+    subgraph results["3. Store"]
         E --> H[(MinIO)]
         F --> H
         G --> H
@@ -38,42 +41,52 @@ flowchart TB
         G --> I
     end
 
-    subgraph serve["4. Serve"]
-        I --> J[React Dashboard]
+    subgraph serve["4. Serve + Notify"]
+        I --> J["React Dashboard<br/>(real-time status, HLS player, captions)"]
         H --> J
+        I -->|all done| K["Webhook POST<br/>(notify your app)"]
     end
 
     style upload fill:#1a1a2e,color:#fff
     style processing fill:#16213e,color:#fff
-    style storage fill:#0f3460,color:#fff
+    style results fill:#0f3460,color:#fff
     style serve fill:#533483,color:#fff
 ```
 
-## the three workers
+## what each worker does
 
-### transcode worker (Go + FFmpeg)
-takes the raw upload and produces HLS adaptive streams at three quality levels. the player automatically switches between them based on the viewer's connection speed.
+### 🎬 transcode worker (Go + FFmpeg)
 
-| quality | resolution | bitrate | use case |
+takes the raw upload and produces [HLS](https://en.wikipedia.org/wiki/HTTP_Live_Streaming) adaptive streams. the video player automatically switches quality based on the viewer's connection — exactly like YouTube.
+
+| quality | resolution | bitrate | when it's used |
 |---|---|---|---|
-| low | 640x360 | 800 kbps | mobile / slow connections |
-| medium | 1280x720 | 2.5 Mbps | default playback |
-| high | 1920x1080 | 5 Mbps | desktop / fast connections |
+| low | 640x360 | 800 kbps | slow wifi, mobile data |
+| medium | 1280x720 | 2.5 Mbps | normal playback |
+| high | 1920x1080 | 5 Mbps | good connection, fullscreen |
 
-outputs a master `.m3u8` playlist that references all three quality streams. any HLS-compatible player (Safari, hls.js, VLC) handles the rest.
+outputs a master `.m3u8` playlist. any HLS player (Safari, hls.js, VLC, mobile apps) handles quality switching automatically.
 
-### whisper worker (Python + OpenAI Whisper)
-extracts the audio track and runs it through OpenAI's Whisper model (base) for automatic speech recognition. produces an SRT subtitle file with word-level timestamps. also detects the spoken language automatically — no config needed.
+### 🗣️ whisper worker (Python + OpenAI Whisper)
 
-why whisper: it handles accents, background noise, and multiple languages without any training. the base model runs on CPU in ~1x real-time (a 60-second video takes ~60 seconds to caption).
+runs [OpenAI Whisper](https://github.com/openai/whisper) locally (no API key needed — the model runs inside the container). extracts audio, transcribes it, generates SRT subtitle files with timestamps.
 
-### thumbnail worker (Python + OpenCV)
-extracts 10 frames at equal intervals across the video. scores each frame on two metrics:
+- handles accents, background noise, and crosstalk
+- auto-detects the language (40+ languages supported)
+- base model runs in ~1x real-time on CPU (60s video ≈ 60s to caption)
+- output: `.srt` file with timestamped segments
 
-- **sharpness** — laplacian variance (blurry frames score low)
-- **entropy** — histogram entropy (frames with actual content score higher than solid colors or black frames)
+this is the same model that powers most AI transcription tools — but running on your hardware, for free.
 
-picks the top 5 candidates, marks the best one. no more black-frame thumbnails, no more selecting frame #1 and hoping for the best.
+### 🖼️ thumbnail worker (Python + OpenCV)
+
+extracts 10 frames at equal intervals and scores each one:
+
+- **sharpness** — laplacian variance (blurry frames get penalized)
+- **entropy** — histogram entropy (black frames and solid colors score near zero)
+- **content quality** — penalizes too-dark and too-bright frames
+
+picks top 5 candidates, marks the winner. no more black-frame thumbnails, no more "uploading a video and manually screenshotting at 0:42."
 
 ## quickstart
 
@@ -83,108 +96,83 @@ cd vidpipe
 docker compose up --build
 ```
 
-open http://localhost:3000, drag in a video, and watch it flow through the pipeline.
+open http://localhost:3000 and upload a video. watch it flow through the pipeline.
 
 ### services
 
-| service | port | url |
+| service | port | what |
 |---|---|---|
-| dashboard | 3000 | http://localhost:3000 |
-| api | 8080 | http://localhost:8080 |
-| minio console | 9001 | http://localhost:9001 |
-| postgres | 5432 | — |
-| redis | 6379 | — |
+| dashboard | http://localhost:3000 | upload, watch, browse |
+| api | http://localhost:8080 | REST API |
+| minio console | http://localhost:9001 | browse stored files |
+| postgres | 5432 | metadata |
+| redis | 6379 | job queue |
 
-minio console credentials: `vidpipe` / `vidpipe123`
+minio credentials: `vidpipe` / `vidpipe123`
 
-## api reference
+## api
 
 ```bash
 # upload a video
-curl -X POST http://localhost:8080/api/upload \
-  -F "file=@video.mp4"
+curl -X POST http://localhost:8080/api/upload -F "file=@video.mp4"
 
-# response
-# { "id": "550e8400-e29b-41d4-a716-446655440000", "status": "uploaded" }
+# response:
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "filename": "video.mp4",
+  "status": "uploaded",
+  "duration": 127.4,
+  "width": 1920,
+  "height": 1080
+}
 
-# list all videos (newest first)
+# list all videos
 curl http://localhost:8080/api/videos
 
-# get single video with all metadata
+# get video with full metadata
 curl http://localhost:8080/api/videos/{id}
 
 # response includes:
-# - transcode_status: pending | processing | completed | failed
-# - caption_status: pending | processing | completed | failed
-# - thumbnail_status: pending | processing | completed | failed
-# - hls_path: path to master playlist
-# - caption_path: path to SRT file
-# - caption_text: full transcript text
-# - caption_language: detected language (en, es, fr, etc.)
-# - thumbnail_path: best thumbnail
-# - thumbnail_candidates: all 5 scored thumbnails
+#   transcode_status: pending → processing → completed
+#   caption_status:   pending → processing → completed
+#   thumbnail_status: pending → processing → completed
+#   hls_path:         path to HLS master playlist
+#   caption_path:     path to SRT file
+#   caption_text:     full transcript
+#   caption_language: detected language code
+#   thumbnail_path:   best thumbnail
+#   thumbnail_candidates: all scored thumbnails
 
-# stream HLS video
+# stream the video (HLS)
 curl http://localhost:8080/api/videos/{id}/stream
 ```
 
+### webhooks
+
+set the `WEBHOOK_URL` environment variable in docker-compose.yml. when all three workers finish processing a video, vidpipe sends a POST request with the full video JSON to your URL.
+
+```bash
+# example: notify your app when processing completes
+WEBHOOK_URL=https://your-app.com/api/video-ready
+```
+
+use this to trigger downstream actions — update your UI, send an email, index the transcript for search, whatever.
+
 ## architecture decisions
 
-**redis streams over kafka** — kafka is overkill for this scale. redis streams give us consumer groups, message acknowledgment, and pending message recovery with zero additional infrastructure. the same redis instance handles caching too.
+**why redis streams, not kafka** — kafka is designed for millions of events per second across a distributed cluster. we're processing video uploads. redis streams give us consumer groups, message acknowledgment, and pending message recovery — all the guarantees we need, with zero additional infrastructure.
 
-**minio over local filesystem** — every production deployment uses S3-compatible storage. using MinIO means the code works identically with AWS S3, Google Cloud Storage, or DigitalOcean Spaces. just change the endpoint.
+**why minio, not the filesystem** — every production deployment uses S3-compatible storage. minio means the same code works with AWS S3, Google Cloud Storage, Cloudflare R2, or DigitalOcean Spaces. change one environment variable.
 
-**go for api + transcode, python for ml workers** — go handles the I/O-heavy parts (upload, streaming, FFmpeg orchestration) where concurrency matters. python handles the ML parts (whisper, opencv) where the ecosystem is better. each worker is a separate container that scales independently.
+**why go + python, not all one language** — go handles the I/O-heavy parts (upload, streaming, FFmpeg process management) where goroutines shine. python handles the ML parts (whisper, opencv) where the ecosystem is 10 years ahead. each worker is a separate container — scale them independently.
 
-**hls over dash** — better browser support (Safari native, everything else via hls.js), simpler tooling, same adaptive quality switching.
+**why hls, not dash** — safari plays HLS natively. everything else uses hls.js (a 50KB library). dash needs a larger player library and has worse mobile support.
 
-**consumer groups, not pub/sub** — each job is processed by exactly one worker. if a worker crashes mid-job, the message stays in the pending list and gets reassigned. no lost jobs.
+**why consumer groups, not pub/sub** — each job must be processed exactly once. if a worker crashes mid-transcode, the message stays in the pending list and gets picked up by another worker. no lost jobs, no duplicate processing.
 
-## project structure
+**why whisper runs locally** — no API key, no per-minute billing, no data leaving your network. the base model is 140MB and runs on CPU. for a self-hosted tool, this matters.
 
-```
-vidpipe/
-├── docker-compose.yml              6 services, one command
-│
-├── api/                            Go upload API + HLS streaming
-│   ├── main.go                     fiber app, routes, startup
-│   ├── handlers/
-│   │   ├── upload.go               multipart upload → MinIO + Redis jobs
-│   │   ├── videos.go               list + get video metadata
-│   │   └── stream.go               HLS proxy from MinIO
-│   ├── queue/redis.go              Redis Streams XADD producer
-│   ├── storage/minio.go            S3-compatible file operations
-│   ├── db/
-│   │   ├── postgres.go             connection pool
-│   │   └── models.go               Video model + CRUD
-│   └── Dockerfile
-│
-├── workers/
-│   ├── transcode/                  Go + FFmpeg → HLS
-│   │   ├── main.go                 consumer group loop, FFmpeg exec
-│   │   └── Dockerfile              alpine + ffmpeg
-│   ├── whisper/                    Python + Whisper → SRT
-│   │   ├── main.py                 consumer group, whisper transcribe
-│   │   └── Dockerfile              python + ffmpeg
-│   └── thumbnail/                  Python + OpenCV → scored frames
-│       ├── main.py                 frame extraction + quality scoring
-│       └── Dockerfile              python + opencv
-│
-├── dashboard/                      React + Vite + Tailwind
-│   └── src/
-│       ├── pages/
-│       │   ├── Upload.tsx          drag-and-drop + progress bar
-│       │   ├── VideoList.tsx       grid with status badges
-│       │   └── VideoDetail.tsx     HLS player + captions + thumbnails
-│       └── components/
-│           ├── VideoPlayer.tsx     hls.js wrapper
-│           ├── StatusBadge.tsx     colored status indicators
-│           └── UploadDropzone.tsx  drag-and-drop zone
-│
-└── db/init.sql                     PostgreSQL schema
-```
-
-## pipeline flow (step by step)
+## how a video flows through the system
 
 ```mermaid
 sequenceDiagram
@@ -196,75 +184,117 @@ sequenceDiagram
     participant Whisper
     participant Thumbnail
     participant DB
+    participant Webhook
 
-    User->>API: POST /api/upload (video file)
-    API->>MinIO: store raw video
-    API->>DB: create video record (status: uploaded)
-    API->>Redis: XADD transcode job
-    API->>Redis: XADD caption job
-    API->>Redis: XADD thumbnail job
-    API-->>User: { id, status: "uploaded" }
+    User->>API: POST /api/upload (video.mp4)
+    API->>API: extract metadata (ffprobe)
+    API->>MinIO: store raw file
+    API->>DB: create record (status: uploaded)
+    API->>Redis: XADD [transcode, caption, thumbnail]
+    API-->>User: { id, status, duration, resolution }
 
-    par parallel processing
-        Redis->>Transcode: XREADGROUP
-        Transcode->>DB: status → processing
-        Transcode->>MinIO: download raw video
-        Transcode->>Transcode: FFmpeg → HLS (360p/720p/1080p)
-        Transcode->>MinIO: upload HLS segments
-        Transcode->>DB: status → completed
+    par runs in parallel
+        Redis->>Transcode: XREADGROUP (transcode job)
+        Transcode->>DB: transcode_status → processing
+        Transcode->>MinIO: download → FFmpeg → HLS
+        Transcode->>MinIO: upload segments + playlists
+        Transcode->>DB: transcode_status → completed
     and
-        Redis->>Whisper: XREADGROUP
-        Whisper->>DB: status → processing
-        Whisper->>MinIO: download raw video
-        Whisper->>Whisper: whisper.transcribe()
-        Whisper->>MinIO: upload SRT
-        Whisper->>DB: status → completed
+        Redis->>Whisper: XREADGROUP (caption job)
+        Whisper->>DB: caption_status → processing
+        Whisper->>MinIO: download → Whisper → SRT
+        Whisper->>MinIO: upload captions
+        Whisper->>DB: caption_status → completed
     and
-        Redis->>Thumbnail: XREADGROUP
-        Thumbnail->>DB: status → processing
-        Thumbnail->>MinIO: download raw video
-        Thumbnail->>Thumbnail: extract + score frames
+        Redis->>Thumbnail: XREADGROUP (thumbnail job)
+        Thumbnail->>DB: thumbnail_status → processing
+        Thumbnail->>MinIO: download → extract frames → score
         Thumbnail->>MinIO: upload thumbnails
-        Thumbnail->>DB: status → completed
+        Thumbnail->>DB: thumbnail_status → completed
     end
 
-    User->>API: GET /api/videos/{id}
-    API->>DB: fetch video
-    API-->>User: all metadata + paths
+    DB-->>API: all statuses = completed
+    API->>DB: video status → completed
+    API->>Webhook: POST video JSON
 ```
 
 ## tech stack
 
-| layer | tech | why |
+| layer | tech | role |
 |---|---|---|
-| api | Go + Fiber | fast, compiled, great concurrency |
-| transcode | Go + FFmpeg | shell out to FFmpeg, handle file I/O |
-| captions | Python + Whisper | best open-source ASR model |
-| thumbnails | Python + OpenCV | frame extraction + image analysis |
-| queue | Redis Streams | consumer groups, message persistence |
-| storage | MinIO | S3-compatible, swappable with AWS S3 |
-| database | PostgreSQL | reliable, supports arrays for thumbnail candidates |
-| dashboard | React + Vite + Tailwind | fast builds, utility CSS |
-| deployment | Docker Compose | single command, reproducible |
+| api server | Go + Fiber | upload, video listing, HLS proxy |
+| transcode | Go + FFmpeg | raw → HLS (360p/720p/1080p) |
+| captions | Python + Whisper | speech-to-text, SRT generation |
+| thumbnails | Python + OpenCV | frame extraction + quality scoring |
+| job queue | Redis Streams | parallel job distribution, consumer groups |
+| object storage | MinIO | S3-compatible, stores all files |
+| database | PostgreSQL | metadata, status tracking |
+| dashboard | React + Vite + Tailwind | upload UI, HLS player, status monitoring |
+| deployment | Docker Compose | one command, 6 containers |
 
-## who is this for
+## who uses something like this
 
-- **indie devs building a video platform** — drop this in as your processing backend
-- **teams that need internal video tooling** — upload training videos, meeting recordings, tutorials
-- **anyone replacing a manual workflow** — if you're currently running FFmpeg by hand, this automates it
-- **learning distributed systems** — a real-world example of queue-based microservices with parallel workers
+- **course platforms** — upload a lecture, get captions + streaming automatically (Udemy, Coursera all have this)
+- **internal tools** — company training videos, meeting recordings with searchable transcripts
+- **video-first products** — any app with user-uploaded video needs this pipeline
+- **content platforms** — TikTok/YouTube-style apps need transcoding + thumbnails at scale
+- **accessibility compliance** — auto-generated captions for WCAG/ADA requirements
 
-## what makes this different from a basic FFmpeg wrapper
+## what makes this different from a FFmpeg script
 
-most video processing repos are a single script: `ffmpeg -i input.mp4 output.m3u8`. vidpipe is a **distributed system**:
+| | typical tutorial | vidpipe |
+|---|---|---|
+| processing | one FFmpeg command, runs synchronously | 3 parallel workers via message queue |
+| captions | none | Whisper AI, auto-detected language |
+| thumbnails | first frame or manual | quality-scored frame selection |
+| storage | local filesystem | S3-compatible (MinIO/AWS/GCS) |
+| failure handling | crashes and you lose the file | consumer groups, message retry |
+| scaling | single process | each worker scales independently |
+| monitoring | none | dashboard with real-time status |
+| deployment | "run this script" | `docker compose up` |
 
-- upload and processing are decoupled (queue-based)
-- three workers run in parallel, not sequentially
-- each worker is a separate container that scales independently
-- S3-compatible storage (not local filesystem)
-- consumer groups ensure no job is lost, even if a worker crashes
-- real-time status tracking through the dashboard
-- AI-powered captions and smart thumbnail selection
+## project structure
+
+```
+vidpipe/
+├── docker-compose.yml              6 services, one command
+│
+├── api/                            Go API server
+│   ├── main.go                     routes, startup, middleware
+│   ├── handlers/
+│   │   ├── upload.go               multipart upload + ffprobe metadata
+│   │   ├── videos.go               CRUD + webhook notifications
+│   │   └── stream.go               HLS proxy from MinIO
+│   ├── queue/redis.go              Redis Streams job producer
+│   ├── storage/minio.go            S3 file operations
+│   └── db/
+│       ├── postgres.go             connection pool
+│       └── models.go               Video model + queries
+│
+├── workers/
+│   ├── transcode/                  Go + FFmpeg
+│   │   ├── main.go                 HLS transcoding (3 qualities)
+│   │   └── Dockerfile              alpine + ffmpeg
+│   ├── whisper/                    Python + Whisper
+│   │   ├── main.py                 speech-to-text + SRT
+│   │   └── Dockerfile              python + ffmpeg + whisper
+│   └── thumbnail/                  Python + OpenCV
+│       ├── main.py                 frame scoring + selection
+│       └── Dockerfile              python + opencv
+│
+├── dashboard/                      React + Vite + Tailwind
+│   └── src/
+│       ├── pages/
+│       │   ├── Upload.tsx          drag-and-drop upload
+│       │   ├── VideoList.tsx       grid with live status
+│       │   └── VideoDetail.tsx     player + captions + thumbnails
+│       └── components/
+│           ├── VideoPlayer.tsx     HLS.js adaptive player
+│           ├── StatusBadge.tsx     animated status indicators
+│           └── UploadDropzone.tsx  file drop zone
+│
+└── db/init.sql                     PostgreSQL schema
+```
 
 ## contributing
 
@@ -274,7 +304,7 @@ cd vidpipe
 docker compose up --build
 ```
 
-the API is at :8080, dashboard at :3000. make changes, rebuild the relevant container.
+api runs on :8080, dashboard on :3000. edit code, rebuild the relevant container with `docker compose up --build <service>`.
 
 ## license
 

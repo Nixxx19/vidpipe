@@ -113,6 +113,9 @@ func main() {
 		default:
 		}
 
+		// Check for stale pending messages (idle > 5 minutes) and reclaim them
+		claimIdleMessages(ctx, rdb, db, minioClient, bucket)
+
 		streams, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    groupName,
 			Consumer: consumerName,
@@ -350,6 +353,85 @@ func updateStatus(ctx context.Context, db *sql.DB, videoID, status, hlsPath stri
 		return fmt.Errorf("update transcode_status to %s: %w", status, err)
 	}
 	return nil
+}
+
+const maxRetries = 3
+
+func claimIdleMessages(ctx context.Context, rdb *redis.Client, database *sql.DB, mc *minio.Client, bucket string) {
+	// Check pending messages for the consumer group
+	pending, err := rdb.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream: streamName,
+		Group:  groupName,
+		Start:  "-",
+		End:    "+",
+		Count:  10,
+	}).Result()
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("XPENDING error: %v", err)
+		}
+		return
+	}
+
+	idleThreshold := 5 * time.Minute
+
+	for _, p := range pending {
+		if p.Idle < idleThreshold {
+			continue
+		}
+
+		// If retried too many times, acknowledge and mark as failed
+		if p.RetryCount >= maxRetries {
+			log.Printf("Message %s exceeded max retries (%d), acknowledging as failed", p.ID, maxRetries)
+			// Try to extract video_id from the message to mark it failed
+			msgs, err := rdb.XRange(ctx, streamName, p.ID, p.ID).Result()
+			if err == nil && len(msgs) > 0 {
+				if videoID, ok := msgs[0].Values["video_id"].(string); ok && videoID != "" {
+					updateStatus(ctx, database, videoID, "failed", "")
+					log.Printf("Marked video %s as failed after %d retries", videoID, maxRetries)
+				}
+			}
+			rdb.XAck(ctx, streamName, groupName, p.ID)
+			continue
+		}
+
+		// Claim the stale message
+		claimed, err := rdb.XClaim(ctx, &redis.XClaimArgs{
+			Stream:   streamName,
+			Group:    groupName,
+			Consumer: consumerName,
+			MinIdle:  idleThreshold,
+			Messages: []string{p.ID},
+		}).Result()
+		if err != nil {
+			log.Printf("XCLAIM error for message %s: %v", p.ID, err)
+			continue
+		}
+
+		for _, msg := range claimed {
+			jobType, _ := msg.Values[jobTypeField].(string)
+			if jobType != jobTypeTarget {
+				rdb.XAck(ctx, streamName, groupName, msg.ID)
+				continue
+			}
+
+			videoID, _ := msg.Values["video_id"].(string)
+			if videoID == "" {
+				log.Printf("Claimed message %s missing video_id, skipping", msg.ID)
+				rdb.XAck(ctx, streamName, groupName, msg.ID)
+				continue
+			}
+
+			log.Printf("Reclaimed stale message %s for video %s (retry %d/%d)", msg.ID, videoID, p.RetryCount+1, maxRetries)
+
+			if err := processTranscode(ctx, database, mc, bucket, videoID); err != nil {
+				log.Printf("Transcode retry failed for video %s: %v", videoID, err)
+				updateStatus(ctx, database, videoID, "failed", "")
+			}
+
+			rdb.XAck(ctx, streamName, groupName, msg.ID)
+		}
+	}
 }
 
 func mustEnv(key string) string {
