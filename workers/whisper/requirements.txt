@@ -1,0 +1,4 @@
+openai-whisper
+boto3
+psycopg2-binary
+redis

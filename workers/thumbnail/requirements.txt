@@ -1,0 +1,6 @@
+opencv-python-headless
+numpy
+boto3
+psycopg2-binary
+redis
+Pillow
