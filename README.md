@@ -16,42 +16,102 @@ YouTube does this. Twitch does this. Every course platform, every internal train
 
 vidpipe is that entire pipeline in one repo. clone it, run it, upload a video.
 
-## the pipeline
+## how it works (phase by phase)
+
+the pipeline has 4 phases. here's what happens when you upload a video:
+
+### phase 1: upload
+
+user uploads a video through the dashboard or API. the Go server extracts metadata (duration, resolution, codec) using ffprobe, stores the raw file in MinIO (S3-compatible storage), and publishes 3 jobs to Redis Streams.
+
+```mermaid
+flowchart LR
+    A[User uploads video] --> B[Go API]
+    B --> C{ffprobe}
+    C --> D[extract duration, resolution, codec]
+    B --> E[(MinIO - raw file stored)]
+    B --> F[Redis Streams]
+    F --> G[transcode job]
+    F --> H[caption job]
+    F --> I[thumbnail job]
+```
+
+at this point the API responds immediately with the video ID and metadata. the user doesn't wait for processing.
+
+### phase 2: parallel processing
+
+three independent workers pick up their jobs from Redis and process the video simultaneously. each worker is a separate Docker container that can scale independently.
 
 ```mermaid
 flowchart TB
-    subgraph upload["1. Upload"]
-        A["User uploads video"] --> B["Go API extracts metadata<br/>(duration, resolution, codec via ffprobe)"]
-        B --> C["Raw file -> MinIO (S3 storage)"]
-        B --> D["3 jobs -> Redis Streams"]
+    subgraph transcode["Transcode Worker (Go + FFmpeg)"]
+        T1[Download raw video from MinIO] --> T2[FFmpeg: encode 360p + 720p + 1080p]
+        T2 --> T3[Generate HLS master playlist]
+        T3 --> T4[Upload .m3u8 + .ts segments to MinIO]
     end
 
-    subgraph processing["2. Parallel Processing"]
-        D --> E["🎬 Transcode Worker<br/>(Go + FFmpeg)<br/>-> HLS 360p / 720p / 1080p"]
-        D --> F["🗣️ Whisper Worker<br/>(Python + OpenAI Whisper)<br/>-> SRT captions + language detection"]
-        D --> G["🖼️ Thumbnail Worker<br/>(Python + OpenCV)<br/>-> quality-scored frame selection"]
+    subgraph whisper["Whisper Worker (Python)"]
+        W1[Download raw video from MinIO] --> W2[Extract audio track]
+        W2 --> W3[Whisper AI: transcribe speech]
+        W3 --> W4[Generate SRT subtitle file]
+        W4 --> W5[Upload .srt to MinIO]
     end
 
-    subgraph results["3. Store"]
-        E --> H[(MinIO)]
-        F --> H
-        G --> H
-        E --> I[(PostgreSQL)]
-        F --> I
-        G --> I
+    subgraph thumbnail["Thumbnail Worker (Python + OpenCV)"]
+        TH1[Download raw video from MinIO] --> TH2[Extract 10 frames at equal intervals]
+        TH2 --> TH3[Score each frame: sharpness + entropy]
+        TH3 --> TH4[Pick top 5, mark best]
+        TH4 --> TH5[Upload thumbnails to MinIO]
     end
-
-    subgraph serve["4. Serve + Notify"]
-        I --> J["React Dashboard<br/>(real-time status, HLS player, captions)"]
-        H --> J
-        I -->|all done| K["Webhook POST<br/>(notify your app)"]
-    end
-
 ```
 
-## what each worker does
+all three workers run at the same time. they don't wait for each other.
 
-### 🎬 transcode worker (Go + FFmpeg)
+### phase 3: store results
+
+each worker uploads its output to MinIO and updates PostgreSQL with the status and file paths.
+
+```mermaid
+flowchart LR
+    subgraph workers
+        A[Transcode Worker]
+        B[Whisper Worker]
+        C[Thumbnail Worker]
+    end
+
+    subgraph storage
+        D[(MinIO)]
+        E[(PostgreSQL)]
+    end
+
+    A -->|HLS segments + playlists| D
+    B -->|SRT caption file| D
+    C -->|thumbnail images| D
+
+    A -->|transcode_status: completed| E
+    B -->|caption_status: completed + transcript text| E
+    C -->|thumbnail_status: completed + best thumbnail| E
+```
+
+### phase 4: serve and notify
+
+the dashboard polls PostgreSQL for status updates. once all three workers finish, the video status changes to "completed" and a webhook fires (if configured).
+
+```mermaid
+flowchart LR
+    A[(PostgreSQL)] -->|all 3 statuses = completed| B[Video status: completed]
+    B --> C[React Dashboard shows results]
+    B --> D[Webhook POST to your app]
+    C --> E[HLS video player with captions]
+    C --> F[Thumbnail gallery]
+    C --> G[Full transcript]
+```
+
+the dashboard auto-refreshes every 3 seconds while processing. when done, you can play the adaptive stream, view captions, and browse thumbnails.
+
+## what each worker does (in detail)
+
+### transcode worker (Go + FFmpeg)
 
 takes the raw upload and produces [HLS](https://en.wikipedia.org/wiki/HTTP_Live_Streaming) adaptive streams. the video player automatically switches quality based on the viewer's connection - exactly like YouTube.
 
@@ -63,18 +123,18 @@ takes the raw upload and produces [HLS](https://en.wikipedia.org/wiki/HTTP_Live_
 
 outputs a master `.m3u8` playlist. any HLS player (Safari, hls.js, VLC, mobile apps) handles quality switching automatically.
 
-### 🗣️ whisper worker (Python + OpenAI Whisper)
+### whisper worker (Python + OpenAI Whisper)
 
 runs [OpenAI Whisper](https://github.com/openai/whisper) locally (no API key needed - the model runs inside the container). extracts audio, transcribes it, generates SRT subtitle files with timestamps.
 
 - handles accents, background noise, and crosstalk
 - auto-detects the language (40+ languages supported)
-- base model runs in ~1x real-time on CPU (60s video ≈ 60s to caption)
+- base model runs in ~1x real-time on CPU (60s video = ~60s to caption)
 - output: `.srt` file with timestamped segments
 
 this is the same model that powers most AI transcription tools - but running on your hardware, for free.
 
-### 🖼️ thumbnail worker (Python + OpenCV)
+### thumbnail worker (Python + OpenCV)
 
 extracts 10 frames at equal intervals and scores each one:
 
@@ -141,6 +201,12 @@ curl http://localhost:8080/api/videos/{id}
 
 # stream the video (HLS)
 curl http://localhost:8080/api/videos/{id}/stream
+
+# real-time progress (Server-Sent Events)
+curl http://localhost:8080/api/videos/{id}/events
+
+# system health + queue stats
+curl http://localhost:8080/api/health
 ```
 
 ### webhooks
@@ -152,7 +218,7 @@ set the `WEBHOOK_URL` environment variable in docker-compose.yml. when all three
 WEBHOOK_URL=https://your-app.com/api/video-ready
 ```
 
-use this to trigger downstream actions - update your UI, send an email, index the transcript for search, whatever.
+use this to trigger downstream actions - update your UI, send an email, index the transcript for search.
 
 ## architecture decisions
 
@@ -168,57 +234,33 @@ use this to trigger downstream actions - update your UI, send an email, index th
 
 **why whisper runs locally** - no API key, no per-minute billing, no data leaving your network. the base model is 140MB and runs on CPU. for a self-hosted tool, this matters.
 
-## how a video flows through the system
+## failure handling
+
+vidpipe doesn't lose jobs. here's what happens when things go wrong:
 
 ```mermaid
-sequenceDiagram
-    participant User
-    participant API
-    participant MinIO
-    participant Redis
-    participant Transcode
-    participant Whisper
-    participant Thumbnail
-    participant DB
-    participant Webhook
-
-    User->>API: POST /api/upload (video.mp4)
-    API->>API: extract metadata (ffprobe)
-    API->>MinIO: store raw file
-    API->>DB: create record (status: uploaded)
-    API->>Redis: XADD [transcode, caption, thumbnail]
-    API-->>User: { id, status, duration, resolution }
-
-    par runs in parallel
-        Redis->>Transcode: XREADGROUP (transcode job)
-        Transcode->>DB: transcode_status -> processing
-        Transcode->>MinIO: download -> FFmpeg -> HLS
-        Transcode->>MinIO: upload segments + playlists
-        Transcode->>DB: transcode_status -> completed
-    and
-        Redis->>Whisper: XREADGROUP (caption job)
-        Whisper->>DB: caption_status -> processing
-        Whisper->>MinIO: download -> Whisper -> SRT
-        Whisper->>MinIO: upload captions
-        Whisper->>DB: caption_status -> completed
-    and
-        Redis->>Thumbnail: XREADGROUP (thumbnail job)
-        Thumbnail->>DB: thumbnail_status -> processing
-        Thumbnail->>MinIO: download -> extract frames -> score
-        Thumbnail->>MinIO: upload thumbnails
-        Thumbnail->>DB: thumbnail_status -> completed
-    end
-
-    DB-->>API: all statuses = completed
-    API->>DB: video status -> completed
-    API->>Webhook: POST video JSON
+flowchart TB
+    A[Worker picks up job] --> B{Processing succeeds?}
+    B -->|yes| C[Update DB: completed]
+    C --> D[XACK: remove from queue]
+    B -->|no / crash| E[Message stays in pending list]
+    E --> F{Idle > 5 minutes?}
+    F -->|yes| G[Another worker XCLAIMs it]
+    G --> H{Retry count < 3?}
+    H -->|yes| A
+    H -->|no| I[Mark as failed, stop retrying]
+    F -->|no| J[Wait for original worker]
 ```
+
+- if a worker crashes mid-job, the message stays pending in Redis
+- after 5 minutes idle, another worker automatically reclaims it
+- after 3 failed attempts, the job is marked as failed (no infinite loops)
 
 ## tech stack
 
 | layer | tech | role |
 |---|---|---|
-| api server | Go + Fiber | upload, video listing, HLS proxy |
+| api server | Go + Fiber | upload, video listing, HLS proxy, SSE |
 | transcode | Go + FFmpeg | raw -> HLS (360p/720p/1080p) |
 | captions | Python + Whisper | speech-to-text, SRT generation |
 | thumbnails | Python + OpenCV | frame extraction + quality scoring |
@@ -244,9 +286,11 @@ sequenceDiagram
 | captions | none | Whisper AI, auto-detected language |
 | thumbnails | first frame or manual | quality-scored frame selection |
 | storage | local filesystem | S3-compatible (MinIO/AWS/GCS) |
-| failure handling | crashes and you lose the file | consumer groups, message retry |
+| failure handling | crashes and you lose the file | consumer groups, automatic retry (3 attempts) |
 | scaling | single process | each worker scales independently |
-| monitoring | none | dashboard with real-time status |
+| monitoring | none | dashboard with real-time status + SSE |
+| notifications | none | webhook POST when done |
+| metadata | none | ffprobe extraction (duration, resolution, codec) |
 | deployment | "run this script" | `docker compose up` |
 
 ## project structure
@@ -259,7 +303,7 @@ vidpipe/
 │   ├── main.go                     routes, startup, middleware
 │   ├── handlers/
 │   │   ├── upload.go               multipart upload + ffprobe metadata
-│   │   ├── videos.go               CRUD + webhook notifications
+│   │   ├── videos.go               CRUD + webhooks + SSE + health
 │   │   └── stream.go               HLS proxy from MinIO
 │   ├── queue/redis.go              Redis Streams job producer
 │   ├── storage/minio.go            S3 file operations
@@ -269,10 +313,10 @@ vidpipe/
 │
 ├── workers/
 │   ├── transcode/                  Go + FFmpeg
-│   │   ├── main.go                 HLS transcoding (3 qualities)
+│   │   ├── main.go                 HLS transcoding (3 qualities) + retry logic
 │   │   └── Dockerfile              alpine + ffmpeg
 │   ├── whisper/                    Python + Whisper
-│   │   ├── main.py                 speech-to-text + SRT
+│   │   ├── main.py                 speech-to-text + SRT generation
 │   │   └── Dockerfile              python + ffmpeg + whisper
 │   └── thumbnail/                  Python + OpenCV
 │       ├── main.py                 frame scoring + selection
@@ -291,4 +335,3 @@ vidpipe/
 │
 └── db/init.sql                     PostgreSQL schema
 ```
-
