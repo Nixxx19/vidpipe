@@ -25,15 +25,14 @@ the pipeline has 4 phases. here's what happens when you upload a video:
 user uploads a video through the dashboard or API. the Go server extracts metadata (duration, resolution, codec) using ffprobe, stores the raw file in MinIO (S3-compatible storage), and publishes 3 jobs to Redis Streams.
 
 ```mermaid
-flowchart LR
-    A[User uploads video] --> B[Go API]
-    B --> C{ffprobe}
-    C --> D[extract duration, resolution, codec]
-    B --> E[(MinIO - raw file stored)]
-    B --> F[Redis Streams]
-    F --> G[transcode job]
-    F --> H[caption job]
-    F --> I[thumbnail job]
+flowchart TD
+    A[User uploads video] --> B[Go API receives file]
+    B --> C[ffprobe: extract duration, resolution, codec]
+    C --> D[Store raw file in MinIO]
+    C --> E[Publish 3 jobs to Redis Streams]
+    E --> F[transcode job]
+    E --> G[caption job]
+    E --> H[thumbnail job]
 ```
 
 at this point the API responds immediately with the video ID and metadata. the user doesn't wait for processing.
@@ -43,25 +42,28 @@ at this point the API responds immediately with the video ID and metadata. the u
 three independent workers pick up their jobs from Redis and process the video simultaneously. each worker is a separate Docker container that can scale independently.
 
 ```mermaid
-flowchart TB
+flowchart TD
     subgraph transcode["Transcode Worker (Go + FFmpeg)"]
-        T1[Download raw video from MinIO] --> T2[FFmpeg: encode 360p + 720p + 1080p]
-        T2 --> T3[Generate HLS master playlist]
-        T3 --> T4[Upload .m3u8 + .ts segments to MinIO]
+        direction TB
+        T1[Download raw video] --> T2[Encode 360p + 720p + 1080p]
+        T2 --> T3[Generate HLS playlist]
+        T3 --> T4[Upload to MinIO]
     end
 
     subgraph whisper["Whisper Worker (Python)"]
-        W1[Download raw video from MinIO] --> W2[Extract audio track]
-        W2 --> W3[Whisper AI: transcribe speech]
-        W3 --> W4[Generate SRT subtitle file]
-        W4 --> W5[Upload .srt to MinIO]
+        direction TB
+        W1[Download raw video] --> W2[Extract audio]
+        W2 --> W3[Whisper: transcribe]
+        W3 --> W4[Generate SRT file]
+        W4 --> W5[Upload to MinIO]
     end
 
     subgraph thumbnail["Thumbnail Worker (Python + OpenCV)"]
-        TH1[Download raw video from MinIO] --> TH2[Extract 10 frames at equal intervals]
-        TH2 --> TH3[Score each frame: sharpness + entropy]
+        direction TB
+        TH1[Download raw video] --> TH2[Extract 10 frames]
+        TH2 --> TH3[Score: sharpness + entropy]
         TH3 --> TH4[Pick top 5, mark best]
-        TH4 --> TH5[Upload thumbnails to MinIO]
+        TH4 --> TH5[Upload to MinIO]
     end
 ```
 
@@ -72,25 +74,14 @@ all three workers run at the same time. they don't wait for each other.
 each worker uploads its output to MinIO and updates PostgreSQL with the status and file paths.
 
 ```mermaid
-flowchart LR
-    subgraph workers
-        A[Transcode Worker]
-        B[Whisper Worker]
-        C[Thumbnail Worker]
-    end
+flowchart TD
+    A[Transcode Worker] -->|HLS segments + playlists| D[(MinIO)]
+    B[Whisper Worker] -->|SRT caption file| D
+    C[Thumbnail Worker] -->|thumbnail images| D
 
-    subgraph storage
-        D[(MinIO)]
-        E[(PostgreSQL)]
-    end
-
-    A -->|HLS segments + playlists| D
-    B -->|SRT caption file| D
-    C -->|thumbnail images| D
-
-    A -->|transcode_status: completed| E
-    B -->|caption_status: completed + transcript text| E
-    C -->|thumbnail_status: completed + best thumbnail| E
+    A -->|transcode_status: completed| E[(PostgreSQL)]
+    B -->|caption_status: completed| E
+    C -->|thumbnail_status: completed| E
 ```
 
 ### phase 4: serve and notify
@@ -98,7 +89,7 @@ flowchart LR
 the dashboard polls PostgreSQL for status updates. once all three workers finish, the video status changes to "completed" and a webhook fires (if configured).
 
 ```mermaid
-flowchart LR
+flowchart TD
     A[(PostgreSQL)] -->|all 3 statuses = completed| B[Video status: completed]
     B --> C[React Dashboard shows results]
     B --> D[Webhook POST to your app]
