@@ -24,17 +24,8 @@ the pipeline has 4 phases. here's what happens when you upload a video:
 
 user uploads a video through the dashboard or API. the Go server extracts metadata (duration, resolution, codec) using ffprobe, stores the raw file in MinIO (S3-compatible storage), and publishes 3 jobs to Redis Streams.
 
-```mermaid
-flowchart LR
-    A[User uploads video] --> B[Go API]
-    B --> C{ffprobe}
-    C --> D[extract duration, resolution, codec]
-    B --> E[(MinIO - raw file stored)]
-    B --> F[Redis Streams]
-    F --> G[transcode job]
-    F --> H[caption job]
-    F --> I[thumbnail job]
-```
+<img width="1170" height="591" alt="Screenshot 2026-04-06 at 12 55 12 PM" src="https://github.com/user-attachments/assets/f93a32b2-5eee-4a3d-8e8c-8ad63681a734" />
+
 
 at this point the API responds immediately with the video ID and metadata. the user doesn't wait for processing.
 
@@ -43,30 +34,19 @@ at this point the API responds immediately with the video ID and metadata. the u
 three independent workers pick up their jobs from Redis and process the video simultaneously. each worker is a separate Docker container that can scale independently.
 
 **transcode worker (Go + FFmpeg):**
-```mermaid
-flowchart TD
-    T1[Download raw video from MinIO] --> T2[FFmpeg: encode 360p + 720p + 1080p]
-    T2 --> T3[Generate HLS master playlist]
-    T3 --> T4[Upload .m3u8 + .ts segments to MinIO]
-```
+
+<img width="387" height="578" alt="Screenshot 2026-04-06 at 12 55 51 PM" src="https://github.com/user-attachments/assets/d6e93066-877b-4dd3-98e0-78df601f19dc" />
+
 
 **whisper worker (Python):**
-```mermaid
-flowchart TD
-    W1[Download raw video from MinIO] --> W2[Extract audio track]
-    W2 --> W3[Whisper AI: transcribe speech]
-    W3 --> W4[Generate SRT subtitle file]
-    W4 --> W5[Upload .srt to MinIO]
-```
+
+<img width="406" height="685" alt="Screenshot 2026-04-06 at 12 56 52 PM" src="https://github.com/user-attachments/assets/ef392b9c-7a86-48b6-8816-b49e9ace210e" />
+
 
 **thumbnail worker (Python + OpenCV):**
-```mermaid
-flowchart TD
-    TH1[Download raw video from MinIO] --> TH2[Extract 10 frames at equal intervals]
-    TH2 --> TH3[Score each frame: sharpness + entropy]
-    TH3 --> TH4[Pick top 5, mark best]
-    TH4 --> TH5[Upload thumbnails to MinIO]
-```
+
+<img width="429" height="678" alt="Screenshot 2026-04-06 at 12 57 34 PM" src="https://github.com/user-attachments/assets/4dd95437-9eac-4046-95df-975f8da264e8" />
+
 
 all three workers run at the same time. they don't wait for each other.
 
@@ -74,41 +54,14 @@ all three workers run at the same time. they don't wait for each other.
 
 each worker uploads its output to MinIO and updates PostgreSQL with the status and file paths.
 
-```mermaid
-flowchart LR
-    subgraph workers
-        A[Transcode Worker]
-        B[Whisper Worker]
-        C[Thumbnail Worker]
-    end
+<img width="911" height="590" alt="Screenshot 2026-04-06 at 12 59 07 PM" src="https://github.com/user-attachments/assets/66a8ac06-8996-4902-bebd-cdcb6c5d28bc" />
 
-    subgraph storage
-        D[(MinIO)]
-        E[(PostgreSQL)]
-    end
-
-    A -->|HLS segments + playlists| D
-    B -->|SRT caption file| D
-    C -->|thumbnail images| D
-
-    A -->|transcode_status: completed| E
-    B -->|caption_status: completed + transcript text| E
-    C -->|thumbnail_status: completed + best thumbnail| E
-```
 
 ### phase 4: serve and notify
 
 the dashboard polls PostgreSQL for status updates. once all three workers finish, the video status changes to "completed" and a webhook fires (if configured).
 
-```mermaid
-flowchart LR
-    A[(PostgreSQL)] -->|all 3 statuses = completed| B[Video status: completed]
-    B --> C[React Dashboard shows results]
-    B --> D[Webhook POST to your app]
-    C --> E[HLS video player with captions]
-    C --> F[Thumbnail gallery]
-    C --> G[Full transcript]
-```
+<img width="1260" height="376" alt="Screenshot 2026-04-06 at 1 01 02 PM" src="https://github.com/user-attachments/assets/0bcf1c09-b6c2-4525-b2f2-f57e1b4f3fb2" />
 
 the dashboard auto-refreshes every 3 seconds while processing. when done, you can play the adaptive stream, view captions, and browse thumbnails.
 
@@ -241,19 +194,8 @@ use this to trigger downstream actions - update your UI, send an email, index th
 
 vidpipe doesn't lose jobs. here's what happens when things go wrong:
 
-```mermaid
-flowchart TB
-    A[Worker picks up job] --> B{Processing succeeds?}
-    B -->|yes| C[Update DB: completed]
-    C --> D[XACK: remove from queue]
-    B -->|no / crash| E[Message stays in pending list]
-    E --> F{Idle > 5 minutes?}
-    F -->|yes| G[Another worker XCLAIMs it]
-    G --> H{Retry count < 3?}
-    H -->|yes| A
-    H -->|no| I[Mark as failed, stop retrying]
-    F -->|no| J[Wait for original worker]
-```
+<img width="602" height="712" alt="Screenshot 2026-04-06 at 1 02 24 PM" src="https://github.com/user-attachments/assets/afc8d3f5-0035-475a-a4e6-dc605cfc0ce7" />
+
 
 - if a worker crashes mid-job, the message stays pending in Redis
 - after 5 minutes idle, another worker automatically reclaims it
