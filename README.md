@@ -47,10 +47,6 @@ flowchart TB
         I -->|all done| K["Webhook POST<br/>(notify your app)"]
     end
 
-    style upload fill:#1a1a2e,color:#fff
-    style processing fill:#16213e,color:#fff
-    style results fill:#0f3460,color:#fff
-    style serve fill:#533483,color:#fff
 ```
 
 ## what each worker does
