@@ -1,6 +1,6 @@
 # vidpipe
 
-the video processing backend that YouTube, Udemy, and Vimeo all had to build from scratch — except you get it with `docker compose up`.
+the video processing backend that YouTube, Udemy, and Vimeo all had to build from scratch - except you get it with `docker compose up`.
 
 upload a video. vidpipe transcodes it to adaptive streaming, generates captions with AI, and picks the best thumbnail. three workers, running in parallel, fully self-hosted. no API keys, no cloud bills, no vendor lock-in.
 
@@ -12,7 +12,7 @@ every platform that handles video uploads ends up building the same pipeline:
 raw upload → transcode → captions → thumbnails → serve
 ```
 
-YouTube does this. Twitch does this. Every course platform, every internal training tool, every video-based product does this. but building it from scratch takes months — you need queue-based job distribution, S3-compatible storage, adaptive streaming, speech-to-text, frame analysis, and a dashboard to monitor it all.
+YouTube does this. Twitch does this. Every course platform, every internal training tool, every video-based product does this. but building it from scratch takes months - you need queue-based job distribution, S3-compatible storage, adaptive streaming, speech-to-text, frame analysis, and a dashboard to monitor it all.
 
 vidpipe is that entire pipeline in one repo. clone it, run it, upload a video.
 
@@ -57,7 +57,7 @@ flowchart TB
 
 ### 🎬 transcode worker (Go + FFmpeg)
 
-takes the raw upload and produces [HLS](https://en.wikipedia.org/wiki/HTTP_Live_Streaming) adaptive streams. the video player automatically switches quality based on the viewer's connection — exactly like YouTube.
+takes the raw upload and produces [HLS](https://en.wikipedia.org/wiki/HTTP_Live_Streaming) adaptive streams. the video player automatically switches quality based on the viewer's connection - exactly like YouTube.
 
 | quality | resolution | bitrate | when it's used |
 |---|---|---|---|
@@ -69,22 +69,22 @@ outputs a master `.m3u8` playlist. any HLS player (Safari, hls.js, VLC, mobile a
 
 ### 🗣️ whisper worker (Python + OpenAI Whisper)
 
-runs [OpenAI Whisper](https://github.com/openai/whisper) locally (no API key needed — the model runs inside the container). extracts audio, transcribes it, generates SRT subtitle files with timestamps.
+runs [OpenAI Whisper](https://github.com/openai/whisper) locally (no API key needed - the model runs inside the container). extracts audio, transcribes it, generates SRT subtitle files with timestamps.
 
 - handles accents, background noise, and crosstalk
 - auto-detects the language (40+ languages supported)
 - base model runs in ~1x real-time on CPU (60s video ≈ 60s to caption)
 - output: `.srt` file with timestamped segments
 
-this is the same model that powers most AI transcription tools — but running on your hardware, for free.
+this is the same model that powers most AI transcription tools - but running on your hardware, for free.
 
 ### 🖼️ thumbnail worker (Python + OpenCV)
 
 extracts 10 frames at equal intervals and scores each one:
 
-- **sharpness** — laplacian variance (blurry frames get penalized)
-- **entropy** — histogram entropy (black frames and solid colors score near zero)
-- **content quality** — penalizes too-dark and too-bright frames
+- **sharpness** - laplacian variance (blurry frames get penalized)
+- **entropy** - histogram entropy (black frames and solid colors score near zero)
+- **content quality** - penalizes too-dark and too-bright frames
 
 picks top 5 candidates, marks the winner. no more black-frame thumbnails, no more "uploading a video and manually screenshotting at 0:42."
 
@@ -156,21 +156,21 @@ set the `WEBHOOK_URL` environment variable in docker-compose.yml. when all three
 WEBHOOK_URL=https://your-app.com/api/video-ready
 ```
 
-use this to trigger downstream actions — update your UI, send an email, index the transcript for search, whatever.
+use this to trigger downstream actions - update your UI, send an email, index the transcript for search, whatever.
 
 ## architecture decisions
 
-**why redis streams, not kafka** — kafka is designed for millions of events per second across a distributed cluster. we're processing video uploads. redis streams give us consumer groups, message acknowledgment, and pending message recovery — all the guarantees we need, with zero additional infrastructure.
+**why redis streams, not kafka** - kafka is designed for millions of events per second across a distributed cluster. we're processing video uploads. redis streams give us consumer groups, message acknowledgment, and pending message recovery - all the guarantees we need, with zero additional infrastructure.
 
-**why minio, not the filesystem** — every production deployment uses S3-compatible storage. minio means the same code works with AWS S3, Google Cloud Storage, Cloudflare R2, or DigitalOcean Spaces. change one environment variable.
+**why minio, not the filesystem** - every production deployment uses S3-compatible storage. minio means the same code works with AWS S3, Google Cloud Storage, Cloudflare R2, or DigitalOcean Spaces. change one environment variable.
 
-**why go + python, not all one language** — go handles the I/O-heavy parts (upload, streaming, FFmpeg process management) where goroutines shine. python handles the ML parts (whisper, opencv) where the ecosystem is 10 years ahead. each worker is a separate container — scale them independently.
+**why go + python, not all one language** - go handles the I/O-heavy parts (upload, streaming, FFmpeg process management) where goroutines shine. python handles the ML parts (whisper, opencv) where the ecosystem is 10 years ahead. each worker is a separate container - scale them independently.
 
-**why hls, not dash** — safari plays HLS natively. everything else uses hls.js (a 50KB library). dash needs a larger player library and has worse mobile support.
+**why hls, not dash** - safari plays HLS natively. everything else uses hls.js (a 50KB library). dash needs a larger player library and has worse mobile support.
 
-**why consumer groups, not pub/sub** — each job must be processed exactly once. if a worker crashes mid-transcode, the message stays in the pending list and gets picked up by another worker. no lost jobs, no duplicate processing.
+**why consumer groups, not pub/sub** - each job must be processed exactly once. if a worker crashes mid-transcode, the message stays in the pending list and gets picked up by another worker. no lost jobs, no duplicate processing.
 
-**why whisper runs locally** — no API key, no per-minute billing, no data leaving your network. the base model is 140MB and runs on CPU. for a self-hosted tool, this matters.
+**why whisper runs locally** - no API key, no per-minute billing, no data leaving your network. the base model is 140MB and runs on CPU. for a self-hosted tool, this matters.
 
 ## how a video flows through the system
 
@@ -234,11 +234,11 @@ sequenceDiagram
 
 ## who uses something like this
 
-- **course platforms** — upload a lecture, get captions + streaming automatically (Udemy, Coursera all have this)
-- **internal tools** — company training videos, meeting recordings with searchable transcripts
-- **video-first products** — any app with user-uploaded video needs this pipeline
-- **content platforms** — TikTok/YouTube-style apps need transcoding + thumbnails at scale
-- **accessibility compliance** — auto-generated captions for WCAG/ADA requirements
+- **course platforms** - upload a lecture, get captions + streaming automatically (Udemy, Coursera all have this)
+- **internal tools** - company training videos, meeting recordings with searchable transcripts
+- **video-first products** - any app with user-uploaded video needs this pipeline
+- **content platforms** - TikTok/YouTube-style apps need transcoding + thumbnails at scale
+- **accessibility compliance** - auto-generated captions for WCAG/ADA requirements
 
 ## what makes this different from a FFmpeg script
 
@@ -296,16 +296,3 @@ vidpipe/
 └── db/init.sql                     PostgreSQL schema
 ```
 
-## contributing
-
-```bash
-git clone https://github.com/Nixxx19/vidpipe.git
-cd vidpipe
-docker compose up --build
-```
-
-api runs on :8080, dashboard on :3000. edit code, rebuild the relevant container with `docker compose up --build <service>`.
-
-## license
-
-MIT
