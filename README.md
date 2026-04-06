@@ -9,7 +9,7 @@ upload a video. vidpipe transcodes it to adaptive streaming, generates captions 
 every platform that handles video uploads ends up building the same pipeline:
 
 ```
-raw upload → transcode → captions → thumbnails → serve
+raw upload -> transcode -> captions -> thumbnails -> serve
 ```
 
 YouTube does this. Twitch does this. Every course platform, every internal training tool, every video-based product does this. but building it from scratch takes months - you need queue-based job distribution, S3-compatible storage, adaptive streaming, speech-to-text, frame analysis, and a dashboard to monitor it all.
@@ -22,14 +22,14 @@ vidpipe is that entire pipeline in one repo. clone it, run it, upload a video.
 flowchart TB
     subgraph upload["1. Upload"]
         A["User uploads video"] --> B["Go API extracts metadata<br/>(duration, resolution, codec via ffprobe)"]
-        B --> C["Raw file → MinIO (S3 storage)"]
-        B --> D["3 jobs → Redis Streams"]
+        B --> C["Raw file -> MinIO (S3 storage)"]
+        B --> D["3 jobs -> Redis Streams"]
     end
 
     subgraph processing["2. Parallel Processing"]
-        D --> E["🎬 Transcode Worker<br/>(Go + FFmpeg)<br/>→ HLS 360p / 720p / 1080p"]
-        D --> F["🗣️ Whisper Worker<br/>(Python + OpenAI Whisper)<br/>→ SRT captions + language detection"]
-        D --> G["🖼️ Thumbnail Worker<br/>(Python + OpenCV)<br/>→ quality-scored frame selection"]
+        D --> E["🎬 Transcode Worker<br/>(Go + FFmpeg)<br/>-> HLS 360p / 720p / 1080p"]
+        D --> F["🗣️ Whisper Worker<br/>(Python + OpenAI Whisper)<br/>-> SRT captions + language detection"]
+        D --> G["🖼️ Thumbnail Worker<br/>(Python + OpenCV)<br/>-> quality-scored frame selection"]
     end
 
     subgraph results["3. Store"]
@@ -133,9 +133,9 @@ curl http://localhost:8080/api/videos
 curl http://localhost:8080/api/videos/{id}
 
 # response includes:
-#   transcode_status: pending → processing → completed
-#   caption_status:   pending → processing → completed
-#   thumbnail_status: pending → processing → completed
+#   transcode_status: pending -> processing -> completed
+#   caption_status:   pending -> processing -> completed
+#   thumbnail_status: pending -> processing -> completed
 #   hls_path:         path to HLS master playlist
 #   caption_path:     path to SRT file
 #   caption_text:     full transcript
@@ -195,26 +195,26 @@ sequenceDiagram
 
     par runs in parallel
         Redis->>Transcode: XREADGROUP (transcode job)
-        Transcode->>DB: transcode_status → processing
-        Transcode->>MinIO: download → FFmpeg → HLS
+        Transcode->>DB: transcode_status -> processing
+        Transcode->>MinIO: download -> FFmpeg -> HLS
         Transcode->>MinIO: upload segments + playlists
-        Transcode->>DB: transcode_status → completed
+        Transcode->>DB: transcode_status -> completed
     and
         Redis->>Whisper: XREADGROUP (caption job)
-        Whisper->>DB: caption_status → processing
-        Whisper->>MinIO: download → Whisper → SRT
+        Whisper->>DB: caption_status -> processing
+        Whisper->>MinIO: download -> Whisper -> SRT
         Whisper->>MinIO: upload captions
-        Whisper->>DB: caption_status → completed
+        Whisper->>DB: caption_status -> completed
     and
         Redis->>Thumbnail: XREADGROUP (thumbnail job)
-        Thumbnail->>DB: thumbnail_status → processing
-        Thumbnail->>MinIO: download → extract frames → score
+        Thumbnail->>DB: thumbnail_status -> processing
+        Thumbnail->>MinIO: download -> extract frames -> score
         Thumbnail->>MinIO: upload thumbnails
-        Thumbnail->>DB: thumbnail_status → completed
+        Thumbnail->>DB: thumbnail_status -> completed
     end
 
     DB-->>API: all statuses = completed
-    API->>DB: video status → completed
+    API->>DB: video status -> completed
     API->>Webhook: POST video JSON
 ```
 
@@ -223,7 +223,7 @@ sequenceDiagram
 | layer | tech | role |
 |---|---|---|
 | api server | Go + Fiber | upload, video listing, HLS proxy |
-| transcode | Go + FFmpeg | raw → HLS (360p/720p/1080p) |
+| transcode | Go + FFmpeg | raw -> HLS (360p/720p/1080p) |
 | captions | Python + Whisper | speech-to-text, SRT generation |
 | thumbnails | Python + OpenCV | frame extraction + quality scoring |
 | job queue | Redis Streams | parallel job distribution, consumer groups |
