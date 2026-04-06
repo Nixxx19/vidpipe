@@ -42,27 +42,30 @@ at this point the API responds immediately with the video ID and metadata. the u
 
 three independent workers pick up their jobs from Redis and process the video simultaneously. each worker is a separate Docker container that can scale independently.
 
+**transcode worker (Go + FFmpeg):**
 ```mermaid
-flowchart TB
-    subgraph transcode["Transcode Worker (Go + FFmpeg)"]
-        T1[Download raw video from MinIO] --> T2[FFmpeg: encode 360p + 720p + 1080p]
-        T2 --> T3[Generate HLS master playlist]
-        T3 --> T4[Upload .m3u8 + .ts segments to MinIO]
-    end
+flowchart TD
+    T1[Download raw video from MinIO] --> T2[FFmpeg: encode 360p + 720p + 1080p]
+    T2 --> T3[Generate HLS master playlist]
+    T3 --> T4[Upload .m3u8 + .ts segments to MinIO]
+```
 
-    subgraph whisper["Whisper Worker (Python)"]
-        W1[Download raw video from MinIO] --> W2[Extract audio track]
-        W2 --> W3[Whisper AI: transcribe speech]
-        W3 --> W4[Generate SRT subtitle file]
-        W4 --> W5[Upload .srt to MinIO]
-    end
+**whisper worker (Python):**
+```mermaid
+flowchart TD
+    W1[Download raw video from MinIO] --> W2[Extract audio track]
+    W2 --> W3[Whisper AI: transcribe speech]
+    W3 --> W4[Generate SRT subtitle file]
+    W4 --> W5[Upload .srt to MinIO]
+```
 
-    subgraph thumbnail["Thumbnail Worker (Python + OpenCV)"]
-        TH1[Download raw video from MinIO] --> TH2[Extract 10 frames at equal intervals]
-        TH2 --> TH3[Score each frame: sharpness + entropy]
-        TH3 --> TH4[Pick top 5, mark best]
-        TH4 --> TH5[Upload thumbnails to MinIO]
-    end
+**thumbnail worker (Python + OpenCV):**
+```mermaid
+flowchart TD
+    TH1[Download raw video from MinIO] --> TH2[Extract 10 frames at equal intervals]
+    TH2 --> TH3[Score each frame: sharpness + entropy]
+    TH3 --> TH4[Pick top 5, mark best]
+    TH4 --> TH5[Upload thumbnails to MinIO]
 ```
 
 all three workers run at the same time. they don't wait for each other.
