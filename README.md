@@ -229,7 +229,7 @@ vidpipe doesn't lose jobs. here's what happens when things go wrong:
 | object storage | MinIO | S3-compatible, stores all files |
 | database | PostgreSQL | metadata, status tracking |
 | dashboard | React + Vite + Tailwind | upload UI, HLS player, status monitoring |
-| deployment | Docker Compose | one command, 6 containers |
+| deployment | Docker Compose | one command, 8 containers |
 
 ## who uses something like this
 
@@ -258,7 +258,7 @@ vidpipe doesn't lose jobs. here's what happens when things go wrong:
 
 ```
 vidpipe/
-├── docker-compose.yml              6 services, one command
+├── docker-compose.yml              8 services, one command
 │
 ├── api/                            Go API server
 │   ├── main.go                     routes, startup, middleware
