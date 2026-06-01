@@ -95,12 +95,12 @@ outputs a master `.m3u8` playlist. any HLS player (Safari, hls.js, VLC, mobile a
 
 ### whisper worker (Python + OpenAI Whisper)
 
-runs [OpenAI Whisper](https://github.com/openai/whisper) locally (no API key needed - the model runs inside the container). extracts audio, transcribes it, generates SRT subtitle files with timestamps.
+runs [OpenAI Whisper](https://github.com/openai/whisper) locally (no API key needed - the model runs inside the container). extracts audio, transcribes it, generates SRT + WebVTT subtitle files with timestamps.
 
 - handles accents, background noise, and crosstalk
 - auto-detects the language (40+ languages supported)
 - base model runs in ~1x real-time on CPU (60s video = ~60s to caption)
-- output: `.srt` file with timestamped segments
+- output: `.srt` + `.vtt` files with timestamped segments (vtt drives the in-player captions)
 
 this is the same model that powers most AI transcription tools - but running on your hardware, for free.
 
@@ -221,9 +221,9 @@ vidpipe doesn't lose jobs. here's what happens when things go wrong:
 
 | layer | tech | role |
 |---|---|---|
-| api server | Go + Fiber | upload, video listing, HLS proxy, SSE |
+| api server | Go + Fiber | upload, video listing, HLS + file serving, SSE |
 | transcode | Go + FFmpeg | raw -> HLS (360p/720p/1080p) |
-| captions | Python + Whisper | speech-to-text, SRT generation |
+| captions | Python + Whisper | speech-to-text, SRT + VTT generation |
 | thumbnails | Python + OpenCV | frame extraction + quality scoring |
 | job queue | Redis Streams | parallel job distribution, consumer groups |
 | object storage | MinIO | S3-compatible, stores all files |
@@ -265,7 +265,7 @@ vidpipe/
 │   ├── handlers/
 │   │   ├── upload.go               multipart upload + ffprobe metadata
 │   │   ├── videos.go               CRUD + webhooks + SSE + health
-│   │   └── stream.go               HLS proxy from MinIO
+│   │   └── stream.go               serves HLS + processed files from MinIO
 │   ├── queue/redis.go              Redis Streams job producer
 │   ├── storage/minio.go            S3 file operations
 │   └── db/
@@ -277,7 +277,7 @@ vidpipe/
 │   │   ├── main.go                 HLS transcoding (3 qualities) + retry logic
 │   │   └── Dockerfile              alpine + ffmpeg
 │   ├── whisper/                    Python + Whisper
-│   │   ├── main.py                 speech-to-text + SRT generation
+│   │   ├── main.py                 speech-to-text + SRT/VTT generation
 │   │   └── Dockerfile              python + ffmpeg + whisper
 │   └── thumbnail/                  Python + OpenCV
 │       ├── main.py                 frame scoring + selection
