@@ -1,5 +1,4 @@
 import io
-import json
 import os
 import signal
 import tempfile
@@ -47,9 +46,13 @@ def get_redis_connection():
 
 
 def get_s3_client():
+    endpoint = os.environ["MINIO_ENDPOINT"]
+    if not endpoint.startswith(("http://", "https://")):
+        scheme = "https" if os.environ.get("MINIO_USE_SSL", "").lower() in ("true", "1") else "http"
+        endpoint = f"{scheme}://{endpoint}"
     return boto3.client(
         "s3",
-        endpoint_url=os.environ["MINIO_ENDPOINT"],
+        endpoint_url=endpoint,
         aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
         aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
         region_name="us-east-1",
@@ -186,11 +189,10 @@ def process_thumbnail_job(video_id: str, storage_path: str):
 
             print(f"  Uploaded {thumb_key} (score={sc:.4f}, frame={frame_idx})")
 
-        candidates_json = json.dumps(uploaded_paths)
-
         update_status(conn, video_id, "completed", {
             "thumbnail_path": best_path,
-            "thumbnail_candidates": candidates_json,
+            # psycopg2 adapts a Python list into a Postgres TEXT[] column.
+            "thumbnail_candidates": uploaded_paths,
         })
 
         print(f"Thumbnail generation completed for video {video_id}")

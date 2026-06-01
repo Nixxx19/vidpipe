@@ -194,18 +194,39 @@ func processTranscode(ctx context.Context, db *sql.DB, mc *minio.Client, bucket,
 	outputPattern := filepath.Join(tmpDir, "output_%v.m3u8")
 	segmentPattern := filepath.Join(tmpDir, "output_%v_%03d.ts")
 
-	args := []string{
-		"-i", inputPath,
-		"-map", "0:v", "-map", "0:a",
-		"-map", "0:v", "-map", "0:a",
-		"-map", "0:v", "-map", "0:a",
-		"-c:v", "libx264",
-		"-c:a", "aac",
+	// Silent videos have no audio stream, so mapping "0:a" would make FFmpeg
+	// fail. Probe first and only include the audio track when one exists.
+	hasAudio := probeHasAudio(ctx, inputPath)
+
+	args := []string{"-i", inputPath}
+	if hasAudio {
+		args = append(args,
+			"-map", "0:v", "-map", "0:a",
+			"-map", "0:v", "-map", "0:a",
+			"-map", "0:v", "-map", "0:a",
+			"-c:v", "libx264",
+			"-c:a", "aac",
+		)
+	} else {
+		args = append(args,
+			"-map", "0:v",
+			"-map", "0:v",
+			"-map", "0:v",
+			"-c:v", "libx264",
+		)
+	}
+	args = append(args,
 		"-f", "hls",
 		"-hls_time", "6",
 		"-hls_list_size", "0",
 		"-hls_segment_filename", segmentPattern,
-		"-var_stream_map", "v:0,a:0 v:1,a:1 v:2,a:2",
+	)
+	if hasAudio {
+		args = append(args, "-var_stream_map", "v:0,a:0 v:1,a:1 v:2,a:2")
+	} else {
+		args = append(args, "-var_stream_map", "v:0 v:1 v:2")
+	}
+	args = append(args,
 		"-filter:v:0", "scale=640:360",
 		"-b:v:0", "800k",
 		"-filter:v:1", "scale=1280:720",
@@ -213,7 +234,7 @@ func processTranscode(ctx context.Context, db *sql.DB, mc *minio.Client, bucket,
 		"-filter:v:2", "scale=1920:1080",
 		"-b:v:2", "5000k",
 		outputPattern,
-	}
+	)
 
 	log.Printf("Running FFmpeg for video %s", videoID)
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
@@ -247,6 +268,24 @@ func processTranscode(ctx context.Context, db *sql.DB, mc *minio.Client, bucket,
 
 	log.Printf("Transcode completed for video %s", videoID)
 	return nil
+}
+
+// probeHasAudio reports whether the input file contains at least one audio
+// stream, using ffprobe.
+func probeHasAudio(ctx context.Context, path string) bool {
+	cmd := exec.CommandContext(ctx, "ffprobe",
+		"-v", "error",
+		"-select_streams", "a",
+		"-show_entries", "stream=index",
+		"-of", "csv=p=0",
+		path,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		log.Printf("ffprobe audio check failed for %s: %v (assuming no audio)", path, err)
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
 }
 
 func downloadFromMinio(ctx context.Context, mc *minio.Client, bucket, objectKey, destPath string) error {

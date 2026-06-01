@@ -1,5 +1,6 @@
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -44,13 +45,31 @@ def get_redis_connection():
 
 
 def get_s3_client():
+    endpoint = os.environ["MINIO_ENDPOINT"]
+    if not endpoint.startswith(("http://", "https://")):
+        scheme = "https" if os.environ.get("MINIO_USE_SSL", "").lower() in ("true", "1") else "http"
+        endpoint = f"{scheme}://{endpoint}"
     return boto3.client(
         "s3",
-        endpoint_url=os.environ["MINIO_ENDPOINT"],
+        endpoint_url=endpoint,
         aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
         aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
         region_name="us-east-1",
     )
+
+
+def has_audio_stream(path: str) -> bool:
+    """Return True if the file contains at least one audio stream."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a",
+             "-show_entries", "stream=index", "-of", "csv=p=0", path],
+            capture_output=True, text=True, check=True,
+        )
+        return result.stdout.strip() != ""
+    except Exception as e:
+        print(f"ffprobe audio check failed for {path}: {e} (assuming no audio)")
+        return False
 
 
 def generate_srt(segments: list) -> str:
@@ -72,6 +91,18 @@ def format_timestamp(seconds: float) -> str:
     secs = int(seconds % 60)
     millis = int((seconds - int(seconds)) * 1000)
     return f"{hrs:02d}:{mins:02d}:{secs:02d},{millis:03d}"
+
+
+# webvtt is what the html5 <track> element needs (srt won't render in-player).
+def generate_vtt(segments: list) -> str:
+    lines = ["WEBVTT", ""]
+    for seg in segments:
+        start = format_timestamp(seg["start"]).replace(",", ".")
+        end = format_timestamp(seg["end"]).replace(",", ".")
+        lines.append(f"{start} --> {end}")
+        lines.append(seg["text"].strip())
+        lines.append("")
+    return "\n".join(lines)
 
 
 def update_status(conn, video_id: str, status: str, extra_fields: dict = None):
@@ -100,6 +131,17 @@ def process_caption_job(video_id: str, storage_path: str, model):
             tmp_path = tmp.name
             s3.download_file(bucket, storage_path, tmp_path)
 
+        # A silent video has no audio to transcribe — complete gracefully with
+        # an empty transcript instead of failing the whole pipeline.
+        if not has_audio_stream(tmp_path):
+            print(f"Video {video_id} has no audio track; skipping transcription.")
+            update_status(conn, video_id, "completed", {
+                "caption_text": "",
+                "caption_language": None,
+            })
+            os.unlink(tmp_path)
+            return
+
         print(f"Transcribing video {video_id}...")
         result = model.transcribe(tmp_path)
 
@@ -111,6 +153,12 @@ def process_caption_job(video_id: str, storage_path: str, model):
             f.write(srt_content)
 
         s3.upload_file(srt_tmp, bucket, caption_path)
+
+        # also emit vtt so the dashboard player can show captions inline
+        vtt_tmp = tmp_path + ".vtt"
+        with open(vtt_tmp, "w") as f:
+            f.write(generate_vtt(result["segments"]))
+        s3.upload_file(vtt_tmp, bucket, f"captions/{video_id}.vtt")
 
         full_text = result["text"].strip()
         language = result.get("language", "en")
@@ -125,6 +173,7 @@ def process_caption_job(video_id: str, storage_path: str, model):
 
         os.unlink(tmp_path)
         os.unlink(srt_tmp)
+        os.unlink(vtt_tmp)
 
     except Exception as e:
         print(f"Error processing caption for {video_id}: {e}")

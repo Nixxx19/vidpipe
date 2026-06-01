@@ -15,7 +15,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/redis/go-redis/v9"
 
-	"streamforge/api/db"
+	"vidpipe/api/db"
 )
 
 // SSEDeps holds dependencies for the SSE progress endpoint.
@@ -48,6 +48,28 @@ func HandleListVideos(database *sql.DB) fiber.Handler {
 			"count":  len(videos),
 		})
 	}
+}
+
+// StartCompletionReconciler runs a background loop that promotes videos to
+// "completed" (and fires the webhook) once all three workers have finished.
+// The workers write their own per-stage status directly to Postgres, so this
+// is the single place that aggregates them — it works regardless of whether a
+// client is currently watching the SSE stream.
+func StartCompletionReconciler(database *sql.DB, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			ids, err := db.FindCompletableVideoIDs(database)
+			if err != nil {
+				log.Printf("completion reconciler: %v", err)
+				continue
+			}
+			for _, id := range ids {
+				CheckAndNotifyCompletion(database, id)
+			}
+		}
+	}()
 }
 
 func CheckAndNotifyCompletion(database *sql.DB, videoID string) {
@@ -159,7 +181,7 @@ func HandleHealth(deps *HealthDeps) fiber.Handler {
 
 		result := fiber.Map{
 			"status":  "ok",
-			"service": "streamforge-api",
+			"service": "vidpipe-api",
 		}
 
 		// Queue depth: XLEN of "video-jobs"

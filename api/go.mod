@@ -1,4 +1,4 @@
-module streamforge/api
+module vidpipe/api
 
 go 1.22
 

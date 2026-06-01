@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 type Video struct {
@@ -23,9 +25,10 @@ type Video struct {
 	CaptionPath      *string    `json:"caption_path"`
 	CaptionText      *string    `json:"caption_text"`
 	CaptionLanguage  *string    `json:"caption_language"`
-	ThumbnailPath    *string    `json:"thumbnail_path"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ThumbnailPath    *string        `json:"thumbnail_path"`
+	ThumbnailCandidates pq.StringArray `json:"thumbnail_candidates"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 func CreateVideo(db *sql.DB, v *Video) error {
@@ -47,14 +50,16 @@ func GetVideo(db *sql.DB, id string) (*Video, error) {
 		SELECT id, filename, original_path, file_size, mime_type,
 		       duration, width, height, status, transcode_status,
 		       caption_status, thumbnail_status, hls_path, caption_path,
-		       caption_text, caption_language, thumbnail_path, created_at, updated_at
+		       caption_text, caption_language, thumbnail_path, thumbnail_candidates,
+		       created_at, updated_at
 		FROM videos WHERE id = $1`
 
 	err := db.QueryRow(query, id).Scan(
 		&v.ID, &v.Filename, &v.OriginalPath, &v.FileSize, &v.MimeType,
 		&v.Duration, &v.Width, &v.Height, &v.Status, &v.TranscodeStatus,
 		&v.CaptionStatus, &v.ThumbnailStatus, &v.HLSPath, &v.CaptionPath,
-		&v.CaptionText, &v.CaptionLanguage, &v.ThumbnailPath, &v.CreatedAt, &v.UpdatedAt,
+		&v.CaptionText, &v.CaptionLanguage, &v.ThumbnailPath, &v.ThumbnailCandidates,
+		&v.CreatedAt, &v.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -70,7 +75,8 @@ func ListVideos(db *sql.DB) ([]Video, error) {
 		SELECT id, filename, original_path, file_size, mime_type,
 		       duration, width, height, status, transcode_status,
 		       caption_status, thumbnail_status, hls_path, caption_path,
-		       caption_text, caption_language, thumbnail_path, created_at, updated_at
+		       caption_text, caption_language, thumbnail_path, thumbnail_candidates,
+		       created_at, updated_at
 		FROM videos ORDER BY created_at DESC`
 
 	rows, err := db.Query(query)
@@ -86,7 +92,8 @@ func ListVideos(db *sql.DB) ([]Video, error) {
 			&v.ID, &v.Filename, &v.OriginalPath, &v.FileSize, &v.MimeType,
 			&v.Duration, &v.Width, &v.Height, &v.Status, &v.TranscodeStatus,
 			&v.CaptionStatus, &v.ThumbnailStatus, &v.HLSPath, &v.CaptionPath,
-			&v.CaptionText, &v.CaptionLanguage, &v.ThumbnailPath, &v.CreatedAt, &v.UpdatedAt,
+			&v.CaptionText, &v.CaptionLanguage, &v.ThumbnailPath, &v.ThumbnailCandidates,
+			&v.CreatedAt, &v.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan video row: %w", err)
 		}
@@ -108,6 +115,33 @@ func CheckAllCompleted(db *sql.DB, videoID string) (bool, error) {
 		return false, fmt.Errorf("failed to check completion statuses: %w", err)
 	}
 	return transcode == "completed" && caption == "completed" && thumbnail == "completed", nil
+}
+
+// FindCompletableVideoIDs returns videos whose three worker stages have all
+// finished but whose overall status has not yet been promoted to completed.
+func FindCompletableVideoIDs(db *sql.DB) ([]string, error) {
+	query := `
+		SELECT id FROM videos
+		WHERE transcode_status = 'completed'
+		  AND caption_status = 'completed'
+		  AND thumbnail_status = 'completed'
+		  AND status NOT IN ('completed', 'failed')`
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find completable videos: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan video id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 func UpdateVideoField(db *sql.DB, id string, field string, value interface{}) error {

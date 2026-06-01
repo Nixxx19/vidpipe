@@ -1,4 +1,4 @@
-module streamforge/workers/transcode
+module vidpipe/workers/transcode
 
 go 1.22
 

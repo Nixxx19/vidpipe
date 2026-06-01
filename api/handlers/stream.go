@@ -10,8 +10,8 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/minio/minio-go/v7"
 
-	"streamforge/api/db"
-	"streamforge/api/storage"
+	"vidpipe/api/db"
+	"vidpipe/api/storage"
 )
 
 type StreamDeps struct {
@@ -94,7 +94,63 @@ func resolveHLSContentType(filename string) string {
 		return "video/mp4"
 	case ".vtt":
 		return "text/vtt"
+	case ".srt":
+		return "application/x-subrip"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
 	default:
 		return "application/octet-stream"
+	}
+}
+
+// HandleFiles streams any processed artifact straight from MinIO by its object
+// key (e.g. hls/<id>/master.m3u8, thumbnails/<id>/thumb_0.jpg, captions/<id>.srt).
+// The dashboard references all of these under /api/files/<key>.
+func HandleFiles(deps *StreamDeps) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		objectName := c.Params("*")
+		if objectName == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "file path is required",
+			})
+		}
+		// Reject path traversal attempts.
+		if strings.Contains(objectName, "..") {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "invalid file path",
+			})
+		}
+
+		obj, err := storage.GetFile(deps.MinioClient, deps.Bucket, objectName)
+		if err != nil {
+			log.Printf("failed to get file %s: %v", objectName, err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to retrieve file",
+			})
+		}
+		defer obj.Close()
+
+		// Stat first so a missing object returns 404 instead of a stream error.
+		if _, err := obj.Stat(); err != nil {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+				"error": "file not found",
+			})
+		}
+
+		c.Set("Content-Type", resolveHLSContentType(objectName))
+		c.Set("Cache-Control", "public, max-age=3600")
+		c.Set("Access-Control-Allow-Origin", "*")
+
+		data, err := io.ReadAll(obj)
+		if err != nil {
+			log.Printf("failed to read file %s: %v", objectName, err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "failed to read file",
+			})
+		}
+
+		return c.Send(data)
 	}
 }

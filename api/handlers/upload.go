@@ -15,9 +15,9 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/redis/go-redis/v9"
 
-	"streamforge/api/db"
-	"streamforge/api/queue"
-	"streamforge/api/storage"
+	"vidpipe/api/db"
+	"vidpipe/api/queue"
+	"vidpipe/api/storage"
 )
 
 type UploadDeps struct {
@@ -102,7 +102,7 @@ func HandleUpload(deps *UploadDeps) fiber.Handler {
 
 		jobTypes := []string{"transcode", "caption", "thumbnail"}
 		for _, jobType := range jobTypes {
-			if err := queue.PublishJob(deps.RedisClient, videoID, jobType); err != nil {
+			if err := queue.PublishJob(deps.RedisClient, videoID, objectName, jobType); err != nil {
 				log.Printf("failed to publish %s job for video %s: %v", jobType, videoID, err)
 			}
 		}

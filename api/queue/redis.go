@@ -26,15 +26,16 @@ func InitRedis(url string) (*redis.Client, error) {
 	return client, nil
 }
 
-func PublishJob(client *redis.Client, videoID string, jobType string) error {
+func PublishJob(client *redis.Client, videoID string, storagePath string, jobType string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_, err := client.XAdd(ctx, &redis.XAddArgs{
 		Stream: "video-jobs",
 		Values: map[string]interface{}{
-			"video_id": videoID,
-			"job_type": jobType,
+			"video_id":     videoID,
+			"storage_path": storagePath,
+			"job_type":     jobType,
 		},
 	}).Result()
 	if err != nil {
