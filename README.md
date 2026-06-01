@@ -8,7 +8,7 @@ upload a video. vidpipe transcodes it to adaptive streaming, generates captions 
 
 a short clip going through the whole pipeline end to end - upload, parallel processing, then playback with adaptive streaming and captions.
 
-https://github.com/user-attachments/assets/fed5b8a9-29bd-420e-859a-17a23e4f0ce2
+https://github.com/user-attachments/assets/a086c1c9-d74e-4529-8d83-4b9c549fc856
 
 what's happening in the demo:
 
