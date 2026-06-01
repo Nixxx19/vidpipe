@@ -4,6 +4,20 @@ the video processing backend that YouTube, Udemy, and Vimeo all had to build fro
 
 upload a video. vidpipe transcodes it to adaptive streaming, generates captions with AI, and picks the best thumbnail. three workers, running in parallel, fully self-hosted. no API keys, no cloud bills, no vendor lock-in.
 
+## demo
+
+a short clip going through the whole pipeline end to end - upload, parallel processing, then playback with adaptive streaming and captions.
+
+<!-- to add the video: open this file on github.com, hit the edit (pencil) button, and drag vidpipe_demo.mp4 (in your downloads) right below this line. github turns it into an inline player automatically. -->
+
+what's happening in the demo:
+
+- **upload** - drop an mp4 and the API stores it in MinIO and fires off 3 jobs on Redis Streams. you get a video id back instantly, no waiting around for processing.
+- **parallel processing** - transcode (Go + FFmpeg, 360/720/1080 HLS), captions (Whisper, auto language detection), and thumbnails (OpenCV frame scoring) all run at the same time in separate containers. the status badges flip pending -> processing -> completed live.
+- **playback** - the dashboard plays the adaptive HLS stream, shows the best thumbnail picked out of 5 scored candidates, and renders the captions right on the player.
+
+the whole run finishes in seconds for a short clip.
+
 ## why does this exist
 
 every platform that handles video uploads ends up building the same pipeline:
