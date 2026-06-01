@@ -9,7 +9,7 @@ function App() {
       <nav className="bg-gray-900 border-b border-gray-800 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <Link to="/" className="text-xl font-bold text-indigo-400">
-            StreamForge
+            vidpipe
           </Link>
           <div className="flex gap-4">
             <Link

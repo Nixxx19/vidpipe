@@ -23,7 +23,7 @@ function VideoList() {
     const fetchVideos = async () => {
       try {
         const response = await axios.get("/api/videos");
-        setVideos(response.data);
+        setVideos(response.data.videos ?? []);
       } catch (err: any) {
         setError(err.message || "Failed to load videos");
       } finally {

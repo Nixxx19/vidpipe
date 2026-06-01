@@ -3,9 +3,11 @@ import Hls from "hls.js";
 
 interface VideoPlayerProps {
   src: string;
+  captionSrc?: string | null;
+  captionLang?: string | null;
 }
 
-function VideoPlayer({ src }: VideoPlayerProps) {
+function VideoPlayer({ src, captionSrc, captionLang }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
 
@@ -58,6 +60,23 @@ function VideoPlayer({ src }: VideoPlayerProps) {
     }
   }, [src]);
 
+  // chrome ignores the <track default> attr when react injects it, so force
+  // the caption track to "showing" once it's attached.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !captionSrc) return;
+
+    const showCaptions = () => {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode = "showing";
+      }
+    };
+
+    showCaptions();
+    video.textTracks.addEventListener("addtrack", showCaptions);
+    return () => video.textTracks.removeEventListener("addtrack", showCaptions);
+  }, [captionSrc]);
+
   return (
     <div className="aspect-video bg-black rounded-xl overflow-hidden">
       <video
@@ -65,7 +84,17 @@ function VideoPlayer({ src }: VideoPlayerProps) {
         className="w-full h-full"
         controls
         playsInline
-      />
+      >
+        {captionSrc && (
+          <track
+            kind="captions"
+            src={captionSrc}
+            srcLang={captionLang || "en"}
+            label="Captions"
+            default
+          />
+        )}
+      </video>
     </div>
   );
 }

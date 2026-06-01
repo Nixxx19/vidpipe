@@ -77,6 +77,10 @@ function VideoDetail() {
   }
 
   const hlsUrl = video.hls_path ? `/api/files/${video.hls_path}` : null;
+  // whisper writes a sibling .vtt next to the .srt for inline player captions
+  const captionUrl = video.caption_path
+    ? `/api/files/${video.caption_path.replace(/\.srt$/, ".vtt")}`
+    : null;
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -90,7 +94,11 @@ function VideoDetail() {
       {/* Video Player */}
       <div className="mb-8">
         {hlsUrl ? (
-          <VideoPlayer src={hlsUrl} />
+          <VideoPlayer
+            src={hlsUrl}
+            captionSrc={captionUrl}
+            captionLang={video.caption_language}
+          />
         ) : (
           <div className="aspect-video bg-gray-900 rounded-xl flex items-center justify-center border border-gray-800">
             <div className="text-center">
