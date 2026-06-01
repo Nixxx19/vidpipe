@@ -142,14 +142,12 @@ minio credentials: `vidpipe` / `vidpipe123`
 # upload a video
 curl -X POST http://localhost:8080/api/upload -F "file=@video.mp4"
 
-# response:
+# response (processing starts immediately - metadata + outputs land via GET below):
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "filename": "video.mp4",
-  "status": "uploaded",
-  "duration": 127.4,
-  "width": 1920,
-  "height": 1080
+  "status": "pending",
+  "message": "video uploaded successfully, processing started"
 }
 
 # list all videos
@@ -159,6 +157,7 @@ curl http://localhost:8080/api/videos
 curl http://localhost:8080/api/videos/{id}
 
 # response includes:
+#   duration, width, height: extracted via ffprobe on upload
 #   transcode_status: pending -> processing -> completed
 #   caption_status:   pending -> processing -> completed
 #   thumbnail_status: pending -> processing -> completed
@@ -171,6 +170,9 @@ curl http://localhost:8080/api/videos/{id}
 
 # stream the video (HLS)
 curl http://localhost:8080/api/videos/{id}/stream
+
+# fetch any processed file from storage (hls playlists/segments, thumbnails, captions)
+curl http://localhost:8080/api/files/{path}
 
 # real-time progress (Server-Sent Events)
 curl http://localhost:8080/api/videos/{id}/events

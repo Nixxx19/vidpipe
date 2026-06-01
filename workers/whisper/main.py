@@ -13,6 +13,12 @@ import whisper
 
 shutdown_requested = False
 
+STREAM = "video-jobs"
+GROUP = "whisper-workers"
+MAX_RETRIES = 3
+# how long a message can sit unacked (a crashed worker) before another reclaims it
+RECLAIM_IDLE_MS = int(os.getenv("RECLAIM_IDLE_SECONDS", "300")) * 1000
+
 
 def handle_signal(signum, frame):
     global shutdown_requested
@@ -186,12 +192,59 @@ def process_caption_job(video_id: str, storage_path: str, model):
         conn.close()
 
 
+def reclaim_stale_jobs(r, consumer, model):
+    """crash recovery: if a worker dies mid-job the message stays pending in
+    redis. reclaim anything idle past the threshold and reprocess it, marking
+    it failed once it's been delivered too many times."""
+    try:
+        pending = r.xpending_range(STREAM, GROUP, min="-", max="+", count=10)
+    except redis.exceptions.ResponseError:
+        return
+
+    for p in pending:
+        msg_id = p["message_id"]
+        if p["time_since_delivered"] < RECLAIM_IDLE_MS:
+            continue
+
+        if p["times_delivered"] >= MAX_RETRIES:
+            entries = r.xrange(STREAM, min=msg_id, max=msg_id)
+            if entries:
+                _, data = entries[0]
+                video_id = data.get("video_id", "")
+                if video_id:
+                    conn = get_pg_connection()
+                    try:
+                        update_status(conn, video_id, "failed")
+                    finally:
+                        conn.close()
+            print(f"message {msg_id} exceeded {MAX_RETRIES} retries, marking failed")
+            r.xack(STREAM, GROUP, msg_id)
+            continue
+
+        claimed = r.xclaim(STREAM, GROUP, consumer, RECLAIM_IDLE_MS, [msg_id])
+        for cid, data in claimed:
+            if data.get("job_type") != "caption":
+                r.xack(STREAM, GROUP, cid)
+                continue
+            video_id = data.get("video_id", "")
+            storage_path = data.get("storage_path", "")
+            if not video_id or not storage_path:
+                r.xack(STREAM, GROUP, cid)
+                continue
+            print(f"reclaimed stale caption job for {video_id} (delivery {p['times_delivered'] + 1}/{MAX_RETRIES})")
+            try:
+                process_caption_job(video_id, storage_path, model)
+            except Exception as e:
+                print(f"reclaim retry failed for {video_id}: {e}")
+            r.xack(STREAM, GROUP, cid)
+
+
 def main():
     print("Starting Whisper Caption Worker...")
 
     r = get_redis_connection()
-    stream = "video-jobs"
-    group = "whisper-workers"
+    stream = STREAM
+    group = GROUP
     consumer = f"whisper-{os.getpid()}"
 
     try:
@@ -208,6 +261,8 @@ def main():
 
     while not shutdown_requested:
         try:
+            reclaim_stale_jobs(r, consumer, model)
+
             messages = r.xreadgroup(
                 group, consumer, {stream: ">"}, count=1, block=5000
             )
