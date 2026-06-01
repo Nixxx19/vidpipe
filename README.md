@@ -8,7 +8,7 @@ upload a video. vidpipe transcodes it to adaptive streaming, generates captions 
 
 a short clip going through the whole pipeline end to end - upload, parallel processing, then playback with adaptive streaming and captions.
 
-<!-- to add the video: open this file on github.com, hit the edit (pencil) button, and drag vidpipe_demo.mp4 (in your downloads) right below this line. github turns it into an inline player automatically. -->
+https://github.com/user-attachments/assets/fed5b8a9-29bd-420e-859a-17a23e4f0ce2
 
 what's happening in the demo:
 
